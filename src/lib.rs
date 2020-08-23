@@ -27,6 +27,53 @@ macro_rules! pin_mut {
     )* }
 }
 
+/// Used to create a TaskPool
+#[derive(Debug, Default, Clone)]
+pub struct TaskPoolBuilder {
+    /// If set, we'll set up the thread pool to use at most n threads. Otherwise use
+    /// the logical core count of the system
+    num_threads: Option<usize>,
+    /// If set, we'll use the given stack size rather than the system default
+    stack_size: Option<usize>,
+    /// Allows customizing the name of the threads - helpful for debugging
+    thread_name: Option<String>,
+}
+
+impl TaskPoolBuilder {
+    /// Creates a new TaskPoolBuilder instance
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Override the number of threads created for the pool. If unset, we default to the number
+    /// of logical cores of the system
+    pub fn num_threads(mut self, num_threads: usize) -> Self {
+        self.num_threads = Some(num_threads);
+        self
+    }
+
+    /// Override the stack size of the threads created for the pool
+    pub fn stack_size(mut self, stack_size: usize) -> Self {
+        self.stack_size = Some(stack_size);
+        self
+    }
+
+    /// Override the name of the threads created for the pool
+    pub fn thread_name(mut self, thread_name: String) -> Self {
+        self.thread_name = Some(thread_name);
+        self
+    }
+
+    /// Creates a new ThreadPoolBuilder based on the current options.
+    pub fn build(&self) -> TaskPool {
+        TaskPool::new(
+            self.num_threads,
+            self.stack_size,
+            self.thread_name.as_deref(),
+        )
+    }
+}
+
 pub struct TaskPool {
     executor: Arc<Executor>,
     threads: Vec<(JoinHandle<()>, Arc<Unparker>)>,
@@ -34,34 +81,55 @@ pub struct TaskPool {
 }
 
 impl TaskPool {
-    pub fn create() -> Self {
-        Self::create_num_threads(num_cpus::get())
-    }
-
-    pub fn create_num_threads(num_threads: usize) -> Self {
+    pub(crate) fn new(
+        num_threads: Option<usize>,
+        stack_size: Option<usize>,
+        thread_name: Option<&str>,
+    ) -> Self {
         let executor = Arc::new(Executor::new());
         let shutdown_flag = Arc::new(AtomicBool::new(false));
 
+        let num_threads = if let Some(num_threads) = num_threads {
+            num_threads
+        } else {
+            num_cpus::get()
+        };
+
         let threads = (0..num_threads)
-            .map(|_| {
+            .map(|i| {
                 let ex = Arc::clone(&executor);
                 let flag = Arc::clone(&shutdown_flag);
                 let (p, u) = parking::pair();
                 let unparker = Arc::new(u);
                 let u = Arc::clone(&unparker);
                 // Run an executor thread.
-                let handle = thread::spawn(move || {
-                    let ticker = ex.ticker(move || u.unpark());
-                    loop {
-                        if flag.load(Ordering::Acquire) {
-                            break;
-                        }
 
-                        if !ticker.tick() {
-                            p.park();
+                let thread_name = if let Some(thread_name) = thread_name {
+                    format!("{} ({})", thread_name, i)
+                } else {
+                    format!("TaskPool ({})", i)
+                };
+
+                let mut thread_builder = thread::Builder::new().name(thread_name);
+
+                if let Some(stack_size) = stack_size {
+                    thread_builder = thread_builder.stack_size(stack_size);
+                }
+
+                let handle = thread_builder
+                    .spawn(move || {
+                        let ticker = ex.ticker(move || u.unpark());
+                        loop {
+                            if flag.load(Ordering::Acquire) {
+                                break;
+                            }
+
+                            if !ticker.tick() {
+                                p.park();
+                            }
                         }
-                    }
-                });
+                    })
+                    .expect("failed to spawn thread");
 
                 (handle, unparker)
             })
