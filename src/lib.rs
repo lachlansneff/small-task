@@ -35,7 +35,8 @@ pub struct TaskPoolBuilder {
     num_threads: Option<usize>,
     /// If set, we'll use the given stack size rather than the system default
     stack_size: Option<usize>,
-    /// Allows customizing the name of the threads - helpful for debugging
+    /// Allows customizing the name of the threads - helpful for debugging. If set, threads will
+    /// be named <thread_name> (<thread_index>), i.e. "MyThreadPool (2)"
     thread_name: Option<String>,
 }
 
@@ -58,7 +59,8 @@ impl TaskPoolBuilder {
         self
     }
 
-    /// Override the name of the threads created for the pool
+    /// Override the name of the threads created for the pool. If set, threads will
+    /// be named <thread_name> (<thread_index>), i.e. "MyThreadPool (2)"
     pub fn thread_name(mut self, thread_name: String) -> Self {
         self.thread_name = Some(thread_name);
         self
@@ -81,6 +83,10 @@ pub struct TaskPool {
 }
 
 impl TaskPool {
+    pub fn build() -> TaskPoolBuilder {
+        TaskPoolBuilder::new()
+    }
+
     pub(crate) fn new(
         num_threads: Option<usize>,
         stack_size: Option<usize>,
@@ -89,11 +95,7 @@ impl TaskPool {
         let executor = Arc::new(Executor::new());
         let shutdown_flag = Arc::new(AtomicBool::new(false));
 
-        let num_threads = if let Some(num_threads) = num_threads {
-            num_threads
-        } else {
-            num_cpus::get()
-        };
+        let num_threads = num_threads.unwrap_or_else(num_cpus::get);
 
         let threads = (0..num_threads)
             .map(|i| {
