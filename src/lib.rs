@@ -1,7 +1,5 @@
 use multitask::{Executor, Task};
 use parking::Unparker;
-// Find a way to get rid of this dependency.
-use futures_util::future::join_all;
 use std::{
     fmt::{self, Debug},
     future::Future,
@@ -96,7 +94,12 @@ impl TaskPool {
 
             f(&mut scope);
 
-            join_all(scope.spawned).await
+            let mut results = Vec::with_capacity(scope.spawned.len());
+            for task in scope.spawned {
+                results.push(task.await);
+            }
+
+            results
         };
 
         pin_mut!(fut);
