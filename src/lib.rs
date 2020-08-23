@@ -1,16 +1,18 @@
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    thread::{self, JoinHandle},
-    fmt::{self, Debug},
-    mem,
-    future::Future,
-    pin::Pin,
-};
 use multitask::{Executor, Task};
 use parking::Unparker;
+use std::{
+    fmt::{self, Debug},
+    future::Future,
+    mem,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread::{self, JoinHandle},
+};
+
+mod slice;
 
 macro_rules! pin_mut {
     ($($x:ident),*) => { $(
@@ -40,28 +42,30 @@ impl TaskPool {
         let executor = Arc::new(Executor::new());
         let shutdown_flag = Arc::new(AtomicBool::new(false));
 
-        let threads = (0..num_threads).map(|_| {
-            let ex = Arc::clone(&executor);
-            let flag = Arc::clone(&shutdown_flag);
-            let (p, u) = parking::pair();
-            let unparker = Arc::new(u);
-            let u = Arc::clone(&unparker);
-            // Run an executor thread.
-            let handle = thread::spawn(move || {
-                let ticker = ex.ticker(move || u.unpark());
-                loop {
-                    if flag.load(Ordering::Acquire) {
-                        break;
-                    }
+        let threads = (0..num_threads)
+            .map(|_| {
+                let ex = Arc::clone(&executor);
+                let flag = Arc::clone(&shutdown_flag);
+                let (p, u) = parking::pair();
+                let unparker = Arc::new(u);
+                let u = Arc::clone(&unparker);
+                // Run an executor thread.
+                let handle = thread::spawn(move || {
+                    let ticker = ex.ticker(move || u.unpark());
+                    loop {
+                        if flag.load(Ordering::Acquire) {
+                            break;
+                        }
 
-                    if !ticker.tick() {
-                        p.park();
+                        if !ticker.tick() {
+                            p.park();
+                        }
                     }
-                }
-            });
+                });
 
-            (handle, unparker)
-        }).collect();
+                (handle, unparker)
+            })
+            .collect();
 
         Self {
             executor,
@@ -77,7 +81,7 @@ impl TaskPool {
     pub fn scope<'scope, F, T>(&self, f: F) -> Vec<T>
     where
         F: FnOnce(&mut Scope<'scope, T>) + 'scope + Send,
-        T: Send + 'static
+        T: Send + 'static,
     {
         // let ex = Arc::clone(&self.executor);
         let executor: &'scope Executor = unsafe { mem::transmute(&*self.executor) };
@@ -97,9 +101,8 @@ impl TaskPool {
         pin_mut!(fut);
 
         // let fut: Pin<&mut (dyn Future<Output=()> + Send)> = fut;
-        let fut: Pin<&'static mut (dyn Future<Output = Vec<T>> + Send + 'static)> = unsafe {
-            mem::transmute(fut as Pin<&mut (dyn Future<Output=Vec<T>> + Send)>)
-        };
+        let fut: Pin<&'static mut (dyn Future<Output = Vec<T>> + Send + 'static)> =
+            unsafe { mem::transmute(fut as Pin<&mut (dyn Future<Output = Vec<T>> + Send)>) };
 
         let task = self.executor.spawn(fut);
 
@@ -147,8 +150,7 @@ pub struct Scope<'scope, T> {
 }
 
 impl<'scope, T: Send + 'static> Scope<'scope, T> {
-    pub fn spawn<Fut: Future<Output = T> + 'scope + Send>(&mut self, f: Fut)
-    {
+    pub fn spawn<Fut: Future<Output = T> + 'scope + Send>(&mut self, f: Fut) {
         let fut: Pin<Box<dyn Future<Output = T> + 'scope + Send>> = Box::pin(f);
         let fut: Pin<Box<dyn Future<Output = T> + 'static + Send>> = unsafe { mem::transmute(fut) };
 
@@ -162,7 +164,7 @@ mod tests {
     use super::*;
 
     #[test]
-    pub fn it_works() {
+    pub fn test_spawn() {
         let pool = TaskPool::create();
 
         let foo = Box::new(42);
