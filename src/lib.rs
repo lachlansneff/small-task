@@ -13,6 +13,8 @@ use std::{
 };
 
 mod slice;
+pub use slice::ParallelSlice;
+pub use slice::ParallelSliceMut;
 
 macro_rules! pin_mut {
     ($($x:ident),*) => { $(
@@ -83,7 +85,7 @@ pub struct TaskPool {
 }
 
 impl TaskPool {
-    pub fn build() -> TaskPoolBuilder {
+    pub fn builder() -> TaskPoolBuilder {
         TaskPoolBuilder::new()
     }
 
@@ -179,6 +181,13 @@ impl TaskPool {
             unsafe { mem::transmute(fut as Pin<&mut (dyn Future<Output = Vec<T>> + Send)>) };
 
         pollster::block_on(self.executor.spawn(fut))
+    }
+
+    pub fn spawn<T>(&self, future: impl Future<Output = T> + Send + 'static) -> Task<T>
+    where
+        T: Send + 'static,
+    {
+        self.executor.spawn(future)
     }
 
     pub fn shutdown(self) -> Result<(), ThreadPanicked> {

@@ -5,7 +5,7 @@ use smalltask::TaskPool;
 // for small workloads.
 
 fn main() {
-    let pool = TaskPool::build()
+    let pool = TaskPool::builder()
         .thread_name("Idle Behavior ThreadPool".to_string())
         .build();
 
