@@ -1,4 +1,3 @@
-use multitask::{Executor, Task};
 use parking::Unparker;
 use std::{
     fmt::{self, Debug},
@@ -15,6 +14,9 @@ use std::{
 mod slice;
 pub use slice::ParallelSlice;
 pub use slice::ParallelSliceMut;
+
+mod task;
+pub use task::Task;
 
 macro_rules! pin_mut {
     ($($x:ident),*) => { $(
@@ -79,7 +81,7 @@ impl TaskPoolBuilder {
 }
 
 pub struct TaskPool {
-    executor: Arc<Executor>,
+    executor: Arc<multitask::Executor>,
     threads: Vec<(JoinHandle<()>, Arc<Unparker>)>,
     shutdown_flag: Arc<AtomicBool>,
 }
@@ -94,7 +96,7 @@ impl TaskPool {
         stack_size: Option<usize>,
         thread_name: Option<&str>,
     ) -> Self {
-        let executor = Arc::new(Executor::new());
+        let executor = Arc::new(multitask::Executor::new());
         let shutdown_flag = Arc::new(AtomicBool::new(false));
 
         let num_threads = num_threads.unwrap_or_else(num_cpus::get);
@@ -155,8 +157,7 @@ impl TaskPool {
         F: FnOnce(&mut Scope<'scope, T>) + 'scope + Send,
         T: Send + 'static,
     {
-        // let ex = Arc::clone(&self.executor);
-        let executor: &'scope Executor = unsafe { mem::transmute(&*self.executor) };
+        let executor: &'scope multitask::Executor = unsafe { mem::transmute(&*self.executor) };
 
         let fut = async move {
             let mut scope = Scope {
@@ -183,7 +184,10 @@ impl TaskPool {
         pollster::block_on(self.executor.spawn(fut))
     }
 
-    pub fn spawn<T>(&self, future: impl Future<Output = T> + Send + 'static) -> Task<T>
+    pub fn spawn<T>(
+        &self,
+        future: impl Future<Output = T> + Send + 'static,
+    ) -> impl Future<Output = T> + Send
     where
         T: Send + 'static,
     {
@@ -226,8 +230,8 @@ impl Debug for ThreadPanicked {
 }
 
 pub struct Scope<'scope, T> {
-    executor: &'scope Executor,
-    spawned: Vec<Task<T>>,
+    executor: &'scope multitask::Executor,
+    spawned: Vec<multitask::Task<T>>,
 }
 
 impl<'scope, T: Send + 'static> Scope<'scope, T> {
