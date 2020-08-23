@@ -1,15 +1,10 @@
-use multitask::{Executor, Task, Ticker};
+use multitask::{Executor, Task};
 use parking::Unparker;
-use thread_local::CachedThreadLocal;
 // Find a way to get rid of this dependency.
-use futures_util::{
-    task::noop_waker,
-    future::join_all,
-};
+use futures_util::future::join_all;
 use std::{
     fmt::{self, Debug},
     future::Future,
-    task::{Context, Poll},
     mem,
     pin::Pin,
     sync::{
@@ -38,12 +33,11 @@ pub struct TaskPool {
     executor: Arc<Executor>,
     threads: Vec<(JoinHandle<()>, Arc<Unparker>)>,
     shutdown_flag: Arc<AtomicBool>,
-    local_ticker: CachedThreadLocal<Ticker>,
 }
 
 impl TaskPool {
     pub fn create() -> Self {
-        Self::create_num_threads(num_cpus::get() - 1)
+        Self::create_num_threads(num_cpus::get())
     }
 
     pub fn create_num_threads(num_threads: usize) -> Self {
@@ -79,7 +73,6 @@ impl TaskPool {
             executor,
             threads,
             shutdown_flag,
-            local_ticker: CachedThreadLocal::new(),
         }
     }
 
@@ -103,7 +96,6 @@ impl TaskPool {
 
             f(&mut scope);
 
-            
             join_all(scope.spawned).await
         };
 
@@ -113,32 +105,7 @@ impl TaskPool {
         let fut: Pin<&'static mut (dyn Future<Output = Vec<T>> + Send + 'static)> =
             unsafe { mem::transmute(fut as Pin<&mut (dyn Future<Output = Vec<T>> + Send)>) };
 
-        let mut task = self.executor.spawn(fut);
-
-        let ticker = self.local_ticker.get_or(|| {
-            executor.ticker(|| {}) // we need a way of making a steal-only ticker.
-        });
-
-        let noop_waker = noop_waker();
-        let mut cx = Context::from_waker(&noop_waker);
-
-        let maybe_output = loop {
-            let task = unsafe { Pin::new_unchecked(&mut task) };
-            match task.poll(&mut cx) {
-                Poll::Ready(output) => break Some(output),
-                Poll::Pending => {
-                    if !ticker.tick() {
-                        break None;
-                    }
-                }
-            }
-        };
-
-        if let Some(output) = maybe_output {
-            output
-        } else {
-            pollster::block_on(task)
-        }
+        pollster::block_on(self.executor.spawn(fut))
     }
 
     pub fn shutdown(self) -> Result<(), ThreadPanicked> {
