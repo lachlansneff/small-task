@@ -1,11 +1,11 @@
-use smalltask::TaskPoolBuilder;
+use smalltask::TaskPool;
 
 // This sample demonstrates a thread pool with one thread per logical core and only one task
 // spinning. Other than the one thread, the system should remain idle, demonstrating good behavior
 // for small workloads.
 
 fn main() {
-    let pool = TaskPoolBuilder::default()
+    let pool = TaskPool::build()
         .thread_name("Idle Behavior ThreadPool".to_string())
         .build();
 
