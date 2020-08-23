@@ -74,9 +74,10 @@ impl TaskPool {
         self.threads.len()
     }
 
-    pub fn scope<'scope, F>(&self, f: F)
+    pub fn scope<'scope, F, T>(&self, f: F) -> Vec<T>
     where
-        F: FnOnce(&mut Scope<'scope>) + 'scope + Send,
+        F: FnOnce(&mut Scope<'scope, T>) + 'scope + Send,
+        T: Send + 'static
     {
         // let ex = Arc::clone(&self.executor);
         let executor: &'scope Executor = unsafe { mem::transmute(&*self.executor) };
@@ -90,19 +91,19 @@ impl TaskPool {
             f(&mut scope);
 
             // Find a way to get rid of this dependency.
-            futures_util::future::join_all(scope.spawned).await;
+            futures_util::future::join_all(scope.spawned).await
         };
 
         pin_mut!(fut);
 
         // let fut: Pin<&mut (dyn Future<Output=()> + Send)> = fut;
-        let fut: Pin<&'static mut (dyn Future<Output = ()> + Send + 'static)> = unsafe {
-            mem::transmute(fut as Pin<&mut (dyn Future<Output=()> + Send)>)
+        let fut: Pin<&'static mut (dyn Future<Output = Vec<T>> + Send + 'static)> = unsafe {
+            mem::transmute(fut as Pin<&mut (dyn Future<Output=Vec<T>> + Send)>)
         };
 
         let task = self.executor.spawn(fut);
 
-        pollster::block_on(task);
+        pollster::block_on(task)
     }
 
     pub fn shutdown(self) -> Result<(), ThreadPanicked> {
@@ -140,16 +141,16 @@ impl Debug for ThreadPanicked {
     }
 }
 
-pub struct Scope<'scope> {
+pub struct Scope<'scope, T> {
     executor: &'scope Executor,
-    spawned: Vec<Task<()>>,
+    spawned: Vec<Task<T>>,
 }
 
-impl<'scope> Scope<'scope> {
-    pub fn spawn<Fut: Future<Output = ()> + 'scope + Send>(&mut self, f: Fut)
+impl<'scope, T: Send + 'static> Scope<'scope, T> {
+    pub fn spawn<Fut: Future<Output = T> + 'scope + Send>(&mut self, f: Fut)
     {
-        let fut: Pin<Box<dyn Future<Output = ()> + 'scope + Send>> = Box::pin(f);
-        let fut: Pin<Box<dyn Future<Output = ()> + 'static + Send>> = unsafe { mem::transmute(fut) };
+        let fut: Pin<Box<dyn Future<Output = T> + 'scope + Send>> = Box::pin(f);
+        let fut: Pin<Box<dyn Future<Output = T> + 'static + Send>> = unsafe { mem::transmute(fut) };
 
         let task = self.executor.spawn(fut);
         self.spawned.push(task);
@@ -166,14 +167,20 @@ mod tests {
 
         let foo = Box::new(42);
 
-        pool.scope(|scope| {
+        let outputs = pool.scope(|scope| {
             for _ in 0..1000 {
                 scope.spawn(async {
                     if *foo != 42 {
-                        println!("not 42!?!?");
+                        panic!("not 42!?!?")
+                    } else {
+                        *foo
                     }
                 });
             }
         });
+
+        for output in outputs {
+            assert_eq!(output, 42);
+        }
     }
 }
