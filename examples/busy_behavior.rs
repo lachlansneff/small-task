@@ -5,7 +5,7 @@ use smalltask::TaskPool;
 // cores)
 
 fn main() {
-    let pool = TaskPool::build()
+    let pool = TaskPool::builder()
         .thread_name("Busy Behavior ThreadPool".to_string())
         .num_threads(4)
         .build();
